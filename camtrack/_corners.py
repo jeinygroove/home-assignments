@@ -132,6 +132,7 @@ class StorageImpl(CornerStorage):
         """
         super().__init__()
         self._corners = list(corners_for_each_frame)
+        # avoid warnings when array is empty and set default value to 0
         self._max_id = max(c.ids.max() if len(c.ids) else 0 for c in self._corners) if len(self._corners) else 0
 
     def __getitem__(self, frame: int) -> FrameCorners:

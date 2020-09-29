@@ -46,14 +46,19 @@ class CornersHelper:
         self.max_id = 0
         self.frame_sizes = (h, w)
 
-        self.WIN_SIZE = 15
-        self.MAX_LEVELS = 3
-        self.MAX_CORNERS = 10000
-        self.MIN_DIST = 7
+        self.WIN_SIZE = 20
+        self.MAX_LEVELS = 2
+        self.MAX_CORNERS = 5000
+        self.MIN_DIST = 10
         self.QUALITY_LEVEL = 0.05
-        self.BLOCK_SIZE = 3
+        self.BLOCK_SIZE = 7
 
     def create_mask(self):
+        """
+        Creates a mask on which we mark existing corners with their size
+        to avoid finding too close corners.
+        :return np array of the size of frame filled with 0 or/and 255
+        """
         mask = np.full(self.frame_sizes, 255, dtype=np.uint8)
         for (x, y), radius in zip(self.corners, self.sizes):
             mask = cv2.circle(mask, (np.round(x).astype(int), np.round(y).astype(int)), radius, thickness=-1, color=0)
@@ -61,11 +66,24 @@ class CornersHelper:
 
     @staticmethod
     def count_condition(statuses):
+        """
+        Count condition using status that can be used to remove untracked corners
+        :param statuses: array with 0/1 for untracked/tracked corners
+        :return array of the same size as statuses
+        """
         statuses = statuses.ravel()
         conditions = (statuses == 1)
         return conditions
 
     def detect_and_track_corners(self, prev_frame, curr_frame):
+        """
+        For prev_frame and curr_frame track self.corners
+        and find new ones.
+        :param prev_frame: previous image
+        :param curr_frame: current image
+        :return FrameCorners with tracked and found corners
+        """
+        # find pyramid for previous frame and for current frame
         prev_frame_pyramid = None
         if prev_frame is not None:
             _, prev_frame_pyramid = cv2.buildOpticalFlowPyramid(prev_frame,
@@ -77,14 +95,20 @@ class CornersHelper:
 
         if len(self.corners) > 0:
             new_corners, statuses, err = None, None, None
+            # find new corners with LK using several levels of pyramids
+            # start from the smallest image and make self.corners and new_corners up-to-date with
+            # the new coordinates
             for level in range(levels, -1, -1):
                 new_corners, statuses, _ = \
                     cv2.calcOpticalFlowPyrLK(prev_frame_pyramid[level], frame_pyramid[level],
                                              np.asarray(self.corners, dtype=np.float32) / 2 ** level,
                                              None if new_corners is None else (new_corners * 2),
                                              flags=0 if new_corners is None else cv2.OPTFLOW_USE_INITIAL_FLOW,
-                                             winSize=(self.WIN_SIZE, self.WIN_SIZE))
+                                             winSize=(self.WIN_SIZE, self.WIN_SIZE),
+                                             criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.001),
+                                             minEigThreshold=1e-4)
 
+            # remove untracked corners
             condition = self.count_condition(statuses)
             self.corners = new_corners[condition].tolist()
             self.sizes = np.asarray(self.sizes)[condition].tolist()
@@ -92,16 +116,24 @@ class CornersHelper:
 
         mask = self.create_mask()
         for level, frame_level in enumerate(frame_pyramid):
+            if len(self.corners) >= self.MAX_CORNERS:
+                break
+            # find new corners, since we bounded by MAX_CORNERS,
+            # then there's no need to search for more than
+            # self.MAX_CORNERS - len(self.corners)
             new_corners = cv2.goodFeaturesToTrack(
                 frame_level,
                 maxCorners=self.MAX_CORNERS - len(self.corners),
                 qualityLevel=self.QUALITY_LEVEL,
-                minDistance=self.MIN_DIST,
+                minDistance=self.MIN_DIST * (np.round(2 ** level).astype(int)),
                 blockSize=self.BLOCK_SIZE,
                 mask=mask
             )
 
+            # add new corners if there are less than self.MAX_CORNERS in total
+            # and if they're not close to already added corners
             if new_corners is not None:
+                # reshape corners for FrameCorners
                 new_corners = new_corners.reshape(-1, 2).astype(np.float32)
                 cur_size = self.BLOCK_SIZE
                 for (x, y) in new_corners:
@@ -118,8 +150,8 @@ class CornersHelper:
                         self.ids.append(self.max_id)
                         self.max_id += 1
 
-                    mask = cv2.circle(mask, (x, y), cur_size + self.MIN_DIST, thickness=-1, color=0)
-
+                    mask = cv2.circle(mask, (x, y), cur_size, thickness=-1, color=0)
+            # update mask for the next level of pyramid
             mask = cv2.pyrDown(mask).astype(np.uint8)
 
         return FrameCorners(np.array(self.ids), np.array(self.corners), np.array(self.sizes))

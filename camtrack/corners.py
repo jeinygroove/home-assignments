@@ -86,23 +86,23 @@ class CornersHelper:
         :return FrameCorners with tracked and found corners
         """
         if len(self.corners) > 0:
+            lk_params = dict(
+                maxLevel=self.MAX_LEVELS,
+                winSize=(self.WIN_SIZE, self.WIN_SIZE),
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.001),
+                minEigThreshold=1e-4
+            )
             # find new corners with LK using several levels of pyramids
             new_corners, st1, _ = \
                 cv2.calcOpticalFlowPyrLK(prev_frame, curr_frame,
                                          np.asarray(self.corners, dtype=np.float32),
                                          None,
-                                         maxLevel=self.MAX_LEVELS,
-                                         winSize=(self.WIN_SIZE, self.WIN_SIZE),
-                                         criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.001),
-                                         minEigThreshold=1e-4)
+                                         **lk_params)
             backtracking_corners, st2, _ = \
                 cv2.calcOpticalFlowPyrLK(curr_frame, prev_frame,
                                          np.asarray(new_corners, dtype=np.float32),
                                          None,
-                                         maxLevel=self.MAX_LEVELS,
-                                         winSize=(self.WIN_SIZE, self.WIN_SIZE),
-                                         criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.001),
-                                         minEigThreshold=1e-4)
+                                         **lk_params)
 
             dist = abs(self.corners - backtracking_corners).reshape(-1, 2).max(-1)
             good_tracked = dist < 0.3

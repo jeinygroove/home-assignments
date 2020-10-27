@@ -114,7 +114,7 @@ class CameraTracker:
         if len(corresps.ids) > 0:
             # I don't use here self.MAX_REPROJ_ERR because it gives worse result here.
             max_reproj_err = 1.0
-            min_angle = 1.0
+            min_angle = 1.1
             view_1 = self.tracked_poses[frame_num_1]
             view_2 = self.tracked_poses[frame_num_2]
             triangulation_params = TriangulationParameters(max_reproj_err, min_angle, 0)

@@ -33,24 +33,38 @@ class CameraTrackerError(Exception):
 
 
 class CloudPointInfo:
+    """
+    Class for storing info about point from the cloud.
+    It's position and number of inliers which can show
+    how good this position is.
+    """
     def __init__(self, pos, inliers):
         self.pos = pos
         self.inliers = inliers
 
 
 class TrackedPoseInfo:
+    """
+    Class for storing info about found camera position.
+    It's position and number of inliers which can show
+    how good this position is.
+    """
     def __init__(self, pos, inliers):
         self.pos = pos
         self.inliers = inliers
 
 
 class CameraTracker:
+    """
+    Class that contains public track() method and additional private methods for it.
+    """
     MAX_REPROJ_ERR = 1.5
 
     def __init__(self, intrinsic_mat, corner_storage, known_view_1, known_view_2, num_of_frames):
         self.intrinsic_mat = intrinsic_mat
         self.corner_storage = corner_storage
         self.num_of_frames = num_of_frames
+        # create dictionary instead of PointCloud object, because I want to store additional data for each point
         self.point_cloud = {}
         # precalculate for each corner frames and indices where it's visible to make retriangulation faster
         self.corner_pos_in_frames = {}
@@ -70,8 +84,21 @@ class CameraTracker:
         print(f'Init point cloud: added {len(init_cloud_pts)} points.')
         self._update_point_cloud(init_cloud_pts, init_ids, 2 * np.ones_like(init_ids))
 
+        # for each corner save the last time it was retriangulated.
         self.retriangulations = {}
 
+    """
+    Add/replace points in cloud with the new ones, 
+    update if new position for the point is better.
+    
+    Attributes:
+        cloud_pts: points positions
+        ids: ids
+        inliers: number of inliers
+    
+    Returns:
+        int: number of updated points
+    """
     def _update_point_cloud(self, cloud_pts, ids, inliers):
         num_of_updated_pts = 0
         for pt_id, pt, inl in zip(ids, cloud_pts, inliers):
@@ -80,27 +107,41 @@ class CameraTracker:
                 self.point_cloud[pt_id] = CloudPointInfo(pt, inl)
         return num_of_updated_pts
 
+    """
+    Try to find position of the camera on the frame.
+    
+    Attributes:
+        frame_number: frame number for which we want to find camera position
+    
+    Returns:
+        R, t and number of inliers or None if smth went wrong.    
+    """
     def _get_pos(self, frame_number):
         corners = self.corner_storage[frame_number]
-        common_cloud_pts = []
-        common_corners = []
+        common_corners, common_cloud_pts = [], []
+        # find cloud points and corners that we know and are 'visible' on the given frame.
         for i, corner in zip(corners.ids.flatten(), corners.points):
             if i in self.point_cloud.keys():
-                common_cloud_pts.append(self.point_cloud[i].pos)
                 common_corners.append(corner)
-        common_cloud_pts, common_corners = np.array(common_cloud_pts), np.array(common_corners)
+                common_cloud_pts.append(self.point_cloud[i].pos)
+        common_corners, common_cloud_pts = np.array(common_corners), np.array(common_cloud_pts)
         if len(common_cloud_pts) < 4:
             return None  # Not enough points for ransac
+        # find inliers and initial position of the camera
         is_success, r_vec, t_vec, inliers = cv2.solvePnPRansac(common_cloud_pts, common_corners, self.intrinsic_mat,
                                                                None, flags=cv2.SOLVEPNP_EPNP, reprojectionError=1.6)
         if not is_success:
             return None
 
+        # specify PnP solution with iterative minimization of reprojection error using inliers
         _, r_vec, t_vec, _ = cv2.solvePnPRansac(common_cloud_pts[inliers], common_corners[inliers], self.intrinsic_mat,
                                                 None, r_vec, t_vec, useExtrinsicGuess=True)
 
         return r_vec, t_vec, len(np.array(inliers).flatten())
 
+    """
+    Triangulate corners from two given frames.
+    """
     def _triangulate(self, frame_num_1: int, frame_num_2: int, initial_triangulation: bool = False):
         corners_1 = self.corner_storage[frame_num_1]
         corners_2 = self.corner_storage[frame_num_2]
@@ -119,6 +160,8 @@ class CameraTracker:
                                                                             self.intrinsic_mat,
                                                                             triangulation_params)
 
+            # if it's initial triangulation, I want to find enough points because in other case
+            # some tests (especially ironman) may fail.
             if initial_triangulation:
                 while len(pts_3d) < 20:
                     triangulation_params = TriangulationParameters(max_reproj_err, min_angle, 0)
@@ -132,10 +175,12 @@ class CameraTracker:
 
             return pts_3d, triangulated_ids
 
-    def _retriangulate(self, corner_id):
-        frames = []
-        corners = []
-        poses = []
+    """
+    Retriangulate corner.
+    """
+    def _retriangulate(self, corner_id, num_of_pairs=5):
+        frames, corners, poses = [], [], []
+        # find frames and position in each frame for this corner.
         for frame, index_on_frame in self.corner_pos_in_frames[corner_id]:
             if self.tracked_poses[frame] is not None:
                 frames.append(frame)
@@ -150,14 +195,16 @@ class CameraTracker:
                 return None
             return cloud_pts[0], 2
 
+        # chose only 15 frames if there're too many frames to make
+        # (taking n pairs from all frames shows worse results)
         indices = np.arange(len(frames))
         np.random.shuffle(indices)
-        indices = indices[:20]
+        indices = indices[:15]
         frames, corners, poses = np.array(frames)[indices], np.array(corners)[indices], np.array(poses)[indices]
 
-        best_pos = None
-        best_inliers = None
-        for _ in range(5):
+        best_pos, best_inliers = None, None
+        # triangulation for each pair of frames can take a lot of time, so do only 5 pairs
+        for _ in range(num_of_pairs):
             frame_1, frame_2 = np.random.choice(len(frames), 2, replace=False)
             corner_pos_1, corner_pos_2 = corners[frame_1], corners[frame_2]
             cloud_pts, _, _ = triangulate_correspondences(
@@ -166,12 +213,15 @@ class CameraTracker:
                 TriangulationParameters(self.MAX_REPROJ_ERR, 2.5, 0.0))
             if len(cloud_pts) == 0:
                 continue
-            repr_errors = [
-                compute_reprojection_errors(cloud_pts, np.array([corner]),
-                                            self.intrinsic_mat @ self.tracked_poses[frame].pos).flatten()[0]
-                for frame, corner in zip(frames, corners)
-            ]
-            inliers = np.sum(np.array(repr_errors) <= self.MAX_REPROJ_ERR)
+
+            inliers = 0
+            for frame, corner in zip(frames, corners):
+                inliers += np.sum(np.array(compute_reprojection_errors(
+                    cloud_pts,
+                    np.array([corner]),
+                    self.intrinsic_mat @ self.tracked_poses[frame].pos
+                ).flatten()) <= self.MAX_REPROJ_ERR)
+
             if best_pos is None or best_inliers < inliers:
                 best_pos = cloud_pts[0]
                 best_inliers = inliers
@@ -180,12 +230,18 @@ class CameraTracker:
             return None
         return best_pos, best_inliers
 
+    """
+    Retriangulate corners from frame and update point cloud.
+    """
     def _update_point_cloud_with_retriangulation(self, frame, step_num, retriangulation_interval=5,
-                                                 retriangulation_limit=1000):
+                                                 retriangulation_limit=700):
+        # choose corners from frame that weren't retriangulated before of
+        # the last retriangulation was more than retriangulation_interval ago.
         points = [i for i in self.corner_storage[frame].ids.flatten()
-                  if i not in self.retriangulations.keys() or self.retriangulations[
-                      i] < step_num - retriangulation_interval]
+                  if i not in self.retriangulations.keys()
+                  or self.retriangulations[i] < step_num - retriangulation_interval]
         np.random.shuffle(points)
+        # choose not all points for retriangulation to make it faster
         points = points[:retriangulation_limit]
 
         retr_cloud_pts, retr_ids, retr_inliers = [], [], []
@@ -199,10 +255,13 @@ class CameraTracker:
 
         print(f'Updated points in the cloud: ', self._update_point_cloud(retr_cloud_pts, retr_ids, retr_inliers))
 
+    """
+    Calculate again already found camera positions and log number of updates (if new position is better.)
+    """
     def _update_camera_poses(self):
-        unsolved_frames = [i for i in range(self.num_of_frames) if self.tracked_poses[i] is not None]
+        solved_frames = [i for i in range(self.num_of_frames) if self.tracked_poses[i] is not None]
         updated_poses = 0
-        for i, pos_info in zip(unsolved_frames, map(self._get_pos, unsolved_frames)):
+        for i, pos_info in zip(solved_frames, map(self._get_pos, solved_frames)):
             if pos_info is not None:
                 r_vec, t_vec, num_of_inliers = pos_info
                 if num_of_inliers >= self.tracked_poses[i].inliers:
@@ -210,7 +269,7 @@ class CameraTracker:
                     self.tracked_poses[i] = TrackedPoseInfo(
                         rodrigues_and_translation_to_view_mat3x4(r_vec, t_vec),
                         num_of_inliers)
-        print('Updates camera position: ', updated_poses)
+        print('Updated camera positions: ', updated_poses)
 
     def track(self):
         step_num = 1
@@ -218,6 +277,7 @@ class CameraTracker:
         while num_of_defined_poses != self.num_of_frames:
             unsolved_frames = [i for i in range(self.num_of_frames) if self.tracked_poses[i] is None]
 
+            # find positions for unknown frames.
             new_poses_info = []
             for frame, found_pos_info in zip(unsolved_frames, map(self._get_pos, unsolved_frames)):
                 if found_pos_info is not None:
@@ -232,6 +292,7 @@ class CameraTracker:
             best_frame = None
             best_new_pos_info = None
 
+            # chose the best position info by comparing number of inliers.
             for frame, pos_info in new_poses_info:
                 if best_new_pos_info is None or best_new_pos_info[2] < pos_info[2]:
                     best_new_pos_info = pos_info
@@ -241,12 +302,14 @@ class CameraTracker:
             print('Number of inliers: ', best_new_pos_info[2])
 
             self.tracked_poses[best_frame] = TrackedPoseInfo(
-                rodrigues_and_translation_to_view_mat3x4(
-                    best_new_pos_info[0], best_new_pos_info[1]), best_new_pos_info[2])
+                rodrigues_and_translation_to_view_mat3x4(best_new_pos_info[0], best_new_pos_info[1]),
+                best_new_pos_info[2]
+            )
 
             self._update_point_cloud_with_retriangulation(best_frame, step_num)
 
-            if step_num % 5 == 0:
+            # update camera positions each 4 steps.
+            if step_num % 4 == 0:
                 self._update_camera_poses()
             step_num += 1
             num_of_defined_poses = np.sum([tracked_pos_info is not None for tracked_pos_info in self.tracked_poses])

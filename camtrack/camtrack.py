@@ -442,9 +442,6 @@ class CameraTracker:
             print(
                 f'{num_of_defined_poses}/{self.num_of_frames} camera positions found, {len(self.point_cloud)} points in cloud')
 
-        for frame in range(self.num_of_frames):
-            log_time = (frame == 0, frame == self.num_of_frames-1)
-            self._update_point_cloud_with_retriangulation(frame, step_num, log_time=log_time)
         self._update_camera_poses(np.arange(0, self.num_of_frames))
 
         ids, cloud_points = [], []

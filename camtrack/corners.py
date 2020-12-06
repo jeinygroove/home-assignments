@@ -46,8 +46,8 @@ class CornersHelper:
         self.max_id = 0
         self.frame_sizes = (h, w)
 
-        self.WIN_SIZE = 20
-        self.MAX_LEVELS = 2
+        self.WIN_SIZE = 11
+        self.MAX_LEVELS = 7
         self.MAX_CORNERS = 5000
         self.MIN_DIST = 10
         self.QUALITY_LEVEL = 0.01
@@ -89,8 +89,8 @@ class CornersHelper:
             lk_params = dict(
                 maxLevel=self.MAX_LEVELS,
                 winSize=(self.WIN_SIZE, self.WIN_SIZE),
-                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.001),
-                minEigThreshold=1e-4
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.001),
+                minEigThreshold=1e-5
             )
             # find new corners with LK using several levels of pyramids
             new_corners, st1, _ = \
@@ -105,7 +105,7 @@ class CornersHelper:
                                          **lk_params)
 
             dist = abs(self.corners - backtracking_corners).reshape(-1, 2).max(-1)
-            good_tracked = dist < 0.3
+            good_tracked = dist < 1.0
 
             # remove untracked corners and badly tracked corners
             condition = self.count_condition(st1, st2) & good_tracked

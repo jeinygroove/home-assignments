@@ -586,7 +586,7 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
     # if we're unlucky, Camera Tracker can not to find poses for a few frames
     num_of_frames = len(rgb_sequence)
     step_size = 2 if (num_of_frames <= 50) else (
-        4 if (num_of_frames <= 100) else (7 if (len(rgb_sequence) <= 350) else 10))
+        4 if (num_of_frames <= 100) else (5 if (len(rgb_sequence) <= 350) else 7))
     try:
         view_mats, point_cloud_builder = CameraTracker(intrinsic_mat, corner_storage, known_view_1, known_view_2,
                                                        len(rgb_sequence), seed=40).track(step_size=step_size)

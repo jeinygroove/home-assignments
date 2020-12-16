@@ -48,7 +48,7 @@ class CornersHelper:
 
         self.WIN_SIZE = 11
         self.MAX_LEVELS = 7
-        self.MAX_CORNERS = 3000
+        self.MAX_CORNERS = 5000
         self.MIN_DIST = 10
         self.QUALITY_LEVEL = 0.01
         self.BLOCK_SIZE = 7

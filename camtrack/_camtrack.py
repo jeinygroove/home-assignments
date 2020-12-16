@@ -9,6 +9,7 @@ __all__ = [
     'check_baseline',
     'get_baseline',
     'compute_reprojection_errors',
+    'compute_reprojection_errors_without_norm',
     'create_cli',
     'draw_residuals',
     'eye3x4',
@@ -20,16 +21,22 @@ __all__ = [
     'view_mat3x4_to_pose',
     '_to_homogeneous',
     '_remove_correspondences_with_ids',
-    'pose_to_view_mat3x4'
+    'pose_to_view_mat3x4',
+    '_get_bundle_adjustment_matrix',
+    '_view_mat4x4_to_rodrigues_and_translation',
+    'compute_reprojection_errors_from_params',
+    'FullInfoPointCloudBuilder',
 ]
 
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 from typing import List, Tuple
 
 import click
 import cv2
 import numpy as np
 import pims
+from scipy.optimize import least_squares
+from scipy.sparse import lil_matrix
 from sklearn.preprocessing import normalize
 import sortednp as snp
 
@@ -93,6 +100,25 @@ def compute_reprojection_errors(points3d: np.ndarray, points2d: np.ndarray,
     projected_points = project_points(points3d, proj_mat)
     points2d_diff = points2d - projected_points
     return np.linalg.norm(points2d_diff, axis=1)
+
+
+def compute_reprojection_errors_without_norm(points3d: np.ndarray, points2d: np.ndarray,
+                                             proj_mat: np.ndarray) -> np.ndarray:
+    projected_points = project_points(points3d, proj_mat)
+    points2d_diff = points2d - projected_points
+    return points2d_diff.flatten()
+
+
+def compute_reprojection_errors_from_params(params, n_cameras, n_points, camera_indices, point_indices, observations,
+                                            intrinsic_mat):
+    camera_params = params[:6 * n_cameras].reshape((n_cameras, 6))
+    points_3d = params[6 * n_cameras:].reshape((n_points, 3))
+    projected_points = []
+    for i, j in zip(point_indices, camera_indices):
+        r_vec, t_vec = camera_params[j][:3, np.newaxis], camera_params[j][3:, np.newaxis]
+        proj_mat = intrinsic_mat @ rodrigues_and_translation_to_view_mat3x4(r_vec, t_vec)
+        projected_points.append(project_points(np.array([points_3d[i]]), proj_mat).flatten())
+    return (np.array(projected_points) - observations).ravel()
 
 
 def calc_inlier_indices(points3d: np.ndarray, points2d: np.ndarray,
@@ -260,6 +286,26 @@ def rodrigues_and_translation_to_view_mat3x4(r_vec: np.ndarray,
     return view_mat
 
 
+def _view_mat4x4_to_rodrigues_and_translation(view_mat):
+    t_vec = view_mat[:3, 3]
+    r_vec, _ = cv2.Rodrigues(view_mat[:3, :3])
+    return r_vec.flatten(), t_vec
+
+
+def _get_bundle_adjustment_matrix(num_of_points, num_of_cameras, cameras_inds, points3d_ids, points2d):
+    num_of_frames = len(points2d)
+    ba_mat = lil_matrix((2 * num_of_frames, 6 * num_of_cameras + 3 * num_of_points), dtype=int)
+
+    i = np.arange(num_of_frames)
+    for j in range(6):
+        ba_mat[2 * i, 6 * cameras_inds + j] = 1
+        ba_mat[2 * i + 1, 6 * cameras_inds + j] = 1
+    for j in range(3):
+        ba_mat[2 * i, 6 * num_of_cameras + 3 * points3d_ids + j] = 1
+        ba_mat[2 * i + 1, 6 * num_of_cameras + 3 * points3d_ids + j] = 1
+    return ba_mat
+
+
 class PointCloudBuilder:
     __slots__ = ('_ids', '_points', '_colors')
 
@@ -316,6 +362,37 @@ class PointCloudBuilder:
         self._points = self.points[sorting_idx].reshape(-1, 3)
         if self.colors is not None:
             self._colors = self.colors[sorting_idx].reshape(-1, 3)
+
+
+class PointWithPose3d:
+    def __init__(self):
+        self.frames = []
+        self.inds_on_frames = []
+        self.corners = []
+        self.cloud_pt = None
+        self.inliers = None
+
+
+class FullInfoPointCloudBuilder(PointCloudBuilder):
+    def __init__(self, ids: np.ndarray = None, points: np.ndarray = None,
+                 colors: np.ndarray = None) -> None:
+        super().__init__(ids, points, colors)
+        self.points_with_pose3d = defaultdict(PointWithPose3d)
+        if ids is not None:
+            for i, point in zip(ids.flatten(), points):
+                self.points_with_pose3d[i].cloud_pt = point
+
+    def add_points_with_inliers(self, ids: np.ndarray, cloud_points: np.ndarray, inliers: np.ndarray) -> None:
+        super().add_points(ids, cloud_points)
+        for i, point, pt_inliers in zip(ids.flatten(), cloud_points, inliers):
+            if self.points_with_pose3d[i].inliers is None or self.points_with_pose3d[i].inliers <= pt_inliers:
+                self.points_with_pose3d[i].cloud_pt = point
+                self.points_with_pose3d[i].inliers = pt_inliers
+
+    def add_corners_on_frame(self, corners: FrameCorners, frame: int):
+        for corner, corner_id in zip(corners.points, corners.ids.flatten()):
+            self.points_with_pose3d[corner_id].frames.append(frame)
+            self.points_with_pose3d[corner_id].corners.append(corner)
 
 
 def _to_int_tuple(point):

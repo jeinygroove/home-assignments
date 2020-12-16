@@ -13,6 +13,7 @@ recordclass~=0.14.3
 scikit-image
 scikit-learn~=0.23.2
 scipy
+sympy
 sortednp~=0.3.0
 transforms3d~=0.3.1
 

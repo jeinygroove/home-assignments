@@ -7,17 +7,20 @@ __all__ = [
     'calc_inlier_indices',
     'check_inliers_mask',
     'check_baseline',
+    'get_baseline',
     'compute_reprojection_errors',
     'create_cli',
     'draw_residuals',
     'eye3x4',
-    'pose_to_view_mat3x4',
     'project_points',
     'rodrigues_and_translation_to_view_mat3x4',
     'to_camera_center',
     'to_opencv_camera_mat3x3',
     'triangulate_correspondences',
-    'view_mat3x4_to_pose'
+    'view_mat3x4_to_pose',
+    '_to_homogeneous',
+    '_remove_correspondences_with_ids',
+    'pose_to_view_mat3x4'
 ]
 
 from collections import namedtuple
@@ -121,7 +124,6 @@ Correspondences = namedtuple(
     'Correspondences',
     ('ids', 'points_1', 'points_2')
 )
-
 
 TriangulationParameters = namedtuple(
     'TriangulationParameters',
@@ -237,6 +239,12 @@ def check_inliers_mask(inliers_mask: np.ndarray,
             inlier_ratio >= min_inlier_ratio)
 
 
+def get_baseline(view_mat_1: np.ndarray, view_mat_2: np.ndarray) -> float:
+    camera_center_1 = to_camera_center(view_mat_1)
+    camera_center_2 = to_camera_center(view_mat_2)
+    return np.linalg.norm(camera_center_2 - camera_center_1)
+
+
 def check_baseline(view_mat_1: np.ndarray, view_mat_2: np.ndarray,
                    min_distance: float) -> bool:
     camera_center_1 = to_camera_center(view_mat_1)
@@ -253,7 +261,6 @@ def rodrigues_and_translation_to_view_mat3x4(r_vec: np.ndarray,
 
 
 class PointCloudBuilder:
-
     __slots__ = ('_ids', '_points', '_colors')
 
     def __init__(self, ids: np.ndarray = None, points: np.ndarray = None,
@@ -382,11 +389,11 @@ def calc_point_cloud_colors(pc_builder: PointCloudBuilder,
                 errors = np.nan_to_num(errors)
 
             consistency_mask = (
-                (errors <= max_reproj_error) &
-                (corners.points[:, 0] >= 0) &
-                (corners.points[:, 1] >= 0) &
-                (corners.points[:, 0] < image.shape[1] - 0.5) &
-                (corners.points[:, 1] < image.shape[0] - 0.5)).flatten()
+                    (errors <= max_reproj_error) &
+                    (corners.points[:, 0] >= 0) &
+                    (corners.points[:, 1] >= 0) &
+                    (corners.points[:, 0] < image.shape[1] - 0.5) &
+                    (corners.points[:, 1] < image.shape[0] - 0.5)).flatten()
             ids_to_process = corners.ids[consistency_mask].flatten()
             corner_points = np.round(
                 corners.points[consistency_mask]
@@ -481,4 +488,5 @@ def create_cli(track_and_calc_colors):
                     frame += 1
                 if key == 'q':
                     break
+
     return cli

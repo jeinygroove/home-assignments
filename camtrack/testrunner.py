@@ -51,7 +51,7 @@ TestInfo = namedtuple('TestInfo', (
 def read_config(config_path):
     root = path.dirname(path.abspath(config_path))
     with open(config_path, 'r') as config_file:
-        raw_config_data = yaml.load(config_file)
+        raw_config_data = yaml.safe_load(config_file)
     config_data = DATASET_CONFIG_SCHEMA(raw_config_data)
     config = dict()
     for name, info in config_data['tests'].items():
